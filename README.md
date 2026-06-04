@@ -239,7 +239,4 @@ See `docs/deployment.md` for full AWS deployment guide.
 
 ## Author
 
-**Mahendra Meena** | B.Tech EEE, IIIT Gwalior (2023–2027)
-
-*NK Securities Quant Hackathon 2025 — Top 6% (356/6000+)*
-*Summer of Quant 2025, IIT Kharagpur*
+**Mahendra Meena** — [LinkedIn](https://www.linkedin.com/in/mahendra-meena-72047b201/?lipi=urn%3Ali%3Apage%3Ad_flagship3_profile_view_base_contact_details%3BiaoO9%2FdjRKWOhaWxs1eueg%3D%3D)
