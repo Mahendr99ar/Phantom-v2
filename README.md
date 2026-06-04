@@ -151,8 +151,8 @@ phantom-v2/
 
 ```
 ╔══════════════════════════════════════════════════════╗
-║   PHANTOM v2 — Distributed DB Engine                ║
-║   By: Mahendra Meena | IIIT Gwalior | 2027          ║
+║   PHANTOM v2 — Distributed DB Engine                 ║
+║   By: Mahendra Meena | IIIT Gwalior | 2027           ║
 ╚══════════════════════════════════════════════════════╝
 
 ══ DEMO 1 — B+ Tree ══════════════════════════════════
