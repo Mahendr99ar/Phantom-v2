@@ -1,0 +1,81 @@
+version: '3.8'
+
+# PHANTOM v2 — 3-Node Raft Cluster
+# Run: docker-compose up
+# Stop: docker-compose down
+
+services:
+
+  # ── Node 1 (initial leader candidate) ──────────────
+  phantom-node-1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: phantom-node-1
+    environment:
+      - NODE_ID=node-1
+      - CLUSTER_NODES=node-1,node-2,node-3
+      - PHANTOM_DATA_DIR=/app/data/node-1
+    volumes:
+      - phantom-data-1:/app/data/node-1
+    ports:
+      - "8001:8000"
+    networks:
+      - phantom-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── Node 2 ──────────────────────────────────────────
+  phantom-node-2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: phantom-node-2
+    environment:
+      - NODE_ID=node-2
+      - CLUSTER_NODES=node-1,node-2,node-3
+      - PHANTOM_DATA_DIR=/app/data/node-2
+    volumes:
+      - phantom-data-2:/app/data/node-2
+    ports:
+      - "8002:8000"
+    networks:
+      - phantom-net
+    restart: unless-stopped
+    depends_on:
+      - phantom-node-1
+
+  # ── Node 3 ──────────────────────────────────────────
+  phantom-node-3:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: phantom-node-3
+    environment:
+      - NODE_ID=node-3
+      - CLUSTER_NODES=node-1,node-2,node-3
+      - PHANTOM_DATA_DIR=/app/data/node-3
+    volumes:
+      - phantom-data-3:/app/data/node-3
+    ports:
+      - "8003:8000"
+    networks:
+      - phantom-net
+    restart: unless-stopped
+    depends_on:
+      - phantom-node-1
+
+# ── Volumes (persistent LSM data) ───────────────────
+volumes:
+  phantom-data-1:
+  phantom-data-2:
+  phantom-data-3:
+
+# ── Network ──────────────────────────────────────────
+networks:
+  phantom-net:
+    driver: bridge
