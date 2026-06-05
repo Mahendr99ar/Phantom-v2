@@ -1,242 +1,148 @@
 # PHANTOM v2
 
-> **Production-grade distributed in-memory database engine built from scratch.**
-> Implements B+ Tree, LSM Tree, Raft consensus, Neural Learned Index, and MVCC transactions.
+I built this because I wanted to understand what actually happens inside a database — not just call `db.insert()` and move on. So I wrote one from scratch.
 
-**By Mahendra Meena | IIIT Gwalior | B.Tech EEE 2027**
+PHANTOM v2 is a distributed in-memory database engine. It does what MySQL or Redis does, but every single component — the index structure, the storage layer, the consensus protocol, the caching — is written by hand in Python.
 
----
-
-## Benchmark Results
-
-| Metric | Value |
-|--------|-------|
-| Write Throughput | **85,000+ ops/sec** |
-| Write P50 Latency | **~11 µs** |
-| Read P50 Latency | **~4 µs** |
-| Learned Index Speedup | **2-3x vs B+ Tree** |
-| Raft Cluster | **3 nodes, survives 1 failure** |
-| Tests Passing | **35 / 35** |
+**Mahendra Meena | IIIT Gwalior | B.Tech EEE 2027**
 
 ---
 
-## Architecture
+## What it can do
 
-```
-┌────────────────────────────────────────────────────────┐
-│                    CLIENT / API                        │
-└──────────────────────┬─────────────────────────────────┘
-                       │
-┌──────────────────────▼─────────────────────────────────┐
-│              PHANTOM v2 — PhantomDB                    │
-│                                                        │
-│  ┌─────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │  B+ Tree    │  │  LSM Tree    │  │ Learned Index │  │
-│  │  (in-memory)│  │  (disk+WAL)  │  │  (PyTorch NN) │  │
-│  └─────────────┘  └──────────────┘  └───────────────┘  │
-│                                                        │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │           MVCC Transaction Layer                │   │
-│  └─────────────────────────────────────────────────┘   │
-│                                                        │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │        Raft Consensus (3-node cluster)          │   │
-│  │   node-1 (Leader) ←→ node-2 ←→ node-3           │   │
-│  └─────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────┘
-```
+- Store and retrieve key-value data at **85,000+ writes per second**
+- Survive a server crash and recover all data automatically (WAL)
+- Run as a **3-node distributed cluster** — kill one node, the system keeps running
+- Use a **neural network instead of a B+ Tree** for faster key lookups
+- Handle multiple concurrent transactions without readers blocking writers (MVCC)
 
 ---
 
-## What's Inside
+## How I built it — and why each piece exists
 
-### 1. B+ Tree Index (`src/storage/btree.py`)
-- All data stored in **leaf nodes** (linked list for range queries)
-- Internal nodes = routing keys only
-- **Self-balancing**: insert/delete maintains O(log n) height
-- Range queries: O(log n + k) via leaf linked list traversal
+### B+ Tree — the index
+I needed fast lookups. A plain array means scanning everything — O(n). A B+ Tree gives O(log n) for any key, and its leaf nodes form a linked list so range queries (`give me all keys between 500 and 600`) are fast too.
 
-### 2. LSM Tree + WAL (`src/storage/lsm.py`)
-- **Write-Ahead Log**: every write appended before MemTable (crash durability)
-- **MemTable**: in-memory Red-Black Tree (SortedDict) — fast writes
-- **SSTable**: immutable sorted files flushed to disk when MemTable is full
-- **Bloom Filter**: O(1) "definitely not present" check — avoids 90% of disk reads
-- **Compaction**: background merge of SSTables reduces read amplification
+I wrote this from scratch — splitting, merging, self-balancing — without any library. It's in `src/storage/btree.py`.
 
-### 3. Raft Consensus (`src/consensus/raft.py`)
-- **Leader Election**: randomised timeouts (300-600ms), majority voting
-- **Log Replication**: AppendEntries RPC — committed when majority ack
-- **Fault Tolerance**: 3-node cluster survives 1 node failure
-- **Heartbeat**: leader sends every 150ms to prevent re-election
+### LSM Tree + Write-Ahead Log — the storage
+The B+ Tree lives in memory. If the process dies, everything is gone. I needed persistence.
 
-### 4. Neural Learned Index (`src/ai/learned_index.py`)
-- Based on: *"The Case for Learned Index Structures"* (Kraska et al., Google 2018)
-- **2-layer MLP (PyTorch)** learns CDF of key distribution
-- Predicts approximate position → binary search within error bounds
-- **2-3x faster** than B+ Tree for numeric keys
+LSM Tree works like this: every write first goes to a log file on disk (WAL), then to an in-memory sorted structure (MemTable). When the MemTable fills up, it gets flushed to an immutable file on disk (SSTable). On startup, the WAL replays any writes that hadn't been flushed — crash recovery.
 
-### 5. MVCC Transactions (`src/phantom.py`)
-- Each write creates a **new version** with timestamp
-- Readers see **consistent snapshot** — no read locks needed
-- Writers never block readers — high concurrency
+I also added a Bloom Filter so reads don't needlessly hit disk. If a key is definitely not in an SSTable, the Bloom Filter says so in O(1) — no disk read needed.
+
+### Raft Consensus — the cluster
+A single node is a single point of failure. I wanted the database to keep working even if one machine goes down.
+
+Raft is the algorithm that makes this possible. Three nodes elect a leader. All writes go through the leader, which replicates them to the other two. As long as two of three nodes are alive, the cluster works. I implemented leader election, heartbeats, and log replication from scratch in `src/consensus/raft.py`.
+
+### Neural Learned Index — the AI part
+This one came from a 2018 Google Research paper — *"The Case for Learned Index Structures"* by Tim Kraska et al. The idea is: a B+ Tree is just a function that maps a key to a position in sorted data. A neural network can learn that function and often do it faster.
+
+I trained a small 2-layer MLP (PyTorch) on the key distribution. At query time, the model predicts the approximate position, then a binary search within a small error window finds the exact value. On numeric keys, it runs 2–3x faster than the B+ Tree.
+
+### MVCC — transactions
+When two things read and write at the same time, you need to be careful. MVCC (Multi-Version Concurrency Control) gives every transaction a consistent snapshot of the data at the moment it started. Readers don't block writers. Writers don't block readers. This is how PostgreSQL handles concurrency.
 
 ---
 
-## Data Structures Summary
+## Numbers
 
-| Structure | Where Used | Complexity |
-|-----------|-----------|------------|
-| B+ Tree | Primary index | O(log n) insert/search |
-| Doubly Linked List | B+ Tree leaf chain | O(k) range query |
-| Red-Black Tree | LSM MemTable | O(log n) insert |
-| Bloom Filter | SSTable lookup guard | O(1) negative check |
-| Neural MLP | Learned Index | O(1) predict + O(log ε) |
-| Sorted Log | WAL | O(1) append |
-| HashMap | MVCC snapshots | O(1) read |
+| What | How much |
+|------|----------|
+| Write throughput | 85,000+ ops/sec |
+| Write latency (P50) | ~11 µs |
+| Read latency (P50) | ~4 µs |
+| Learned Index speedup | 2–3x vs B+ Tree |
+| Cluster size | 3 nodes |
+| Tests | 35 passing |
 
 ---
 
-## Quick Start
+## Running it
 
 ```bash
-# 1. Clone
-git clone https://github.com/YOUR_USERNAME/phantom-v2.git
-cd phantom-v2
+git clone https://github.com/Mahendr99ar/Phantom-v2.git
+cd Phantom-v2
 
-# 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Run full demo (all 5 components)
-python demo.py
+# See everything working
+cd src
+set PYTHONPATH=.
+python ../demo.py
 
-# 4. Run tests
-pytest tests/ -v
-
-# 5. Run with Docker (3-node cluster)
-cd docker
-docker-compose up
+# Run tests
+cd ..
+set PYTHONPATH=src
+python -m pytest tests/ -v
 ```
+
+The demo walks through each component one by one — B+ Tree, LSM Tree with crash recovery, MVCC transactions, Raft consensus, and the Learned Index benchmark.
 
 ---
 
-## Project Structure
+## Running the 3-node cluster with Docker
+
+```bash
+cd docker
+docker-compose up --build
+```
+
+Three containers start up, elect a leader, and start accepting writes. Kill one:
+
+```bash
+docker stop phantom-node-3
+```
+
+The other two keep running. Revive it:
+
+```bash
+docker start phantom-node-3
+```
+
+It catches up automatically.
+
+---
+
+## Project layout
 
 ```
 phantom-v2/
 ├── src/
 │   ├── storage/
-│   │   ├── btree.py          # B+ Tree index
-│   │   └── lsm.py            # LSM Tree + WAL + Bloom Filter + SSTable
+│   │   ├── btree.py         ← B+ Tree from scratch
+│   │   └── lsm.py           ← WAL, MemTable, SSTable, Bloom Filter
 │   ├── consensus/
-│   │   └── raft.py           # Raft leader election + log replication
+│   │   └── raft.py          ← Raft leader election + log replication
 │   ├── ai/
-│   │   └── learned_index.py  # Neural Learned Index (PyTorch)
-│   └── phantom.py            # Main PhantomDB class (ties everything)
+│   │   └── learned_index.py ← Neural index (PyTorch)
+│   └── phantom.py           ← Puts it all together + MVCC
 ├── tests/
-│   └── test_phantom.py       # 35 unit + integration tests
+│   └── test_phantom.py      ← 35 tests
 ├── docker/
 │   ├── Dockerfile
-│   └── docker-compose.yml    # 3-node Raft cluster
+│   └── docker-compose.yml
 ├── docs/
-│   └── architecture.md
-├── demo.py                   # Full live demo
-├── requirements.txt
-├── .gitignore
-└── README.md
+│   └── deployment.md
+├── demo.py
+└── requirements.txt
 ```
 
 ---
 
-## Demo Output (sample)
+## What I learned building this
 
-```
-╔══════════════════════════════════════════════════════╗
-║   PHANTOM v2 — Distributed DB Engine                 ║
-║   By: Mahendra Meena | IIIT Gwalior | 2027           ║
-╚══════════════════════════════════════════════════════╝
+The thing that surprised me most was how much a Bloom Filter helps. Without it, every read that misses the MemTable has to check every SSTable on disk. With it, most misses are caught in memory in microseconds.
 
-══ DEMO 1 — B+ Tree ══════════════════════════════════
-  Inserted 10,000 keys in 48.3ms
-  1000 lookups | Avg: 3.8 µs/lookup
-  Range [500,510]: 11 results
+The Raft implementation was the hardest part — getting leader election to work correctly with random timeouts, and making sure log entries only commit once a majority of nodes acknowledge them.
 
-══ DEMO 2 — LSM Tree + WAL ═══════════════════════════
-  [LSM] Flushed MemTable → sst_000000.json
-  After crash recovery, GET 250 → val_250  ✅
-
-══ DEMO 4 — Raft Consensus ═══════════════════════════
-  👑 node-2 | LEADER  | term=1
-  ⬜ node-1 | FOLLOWER | term=1
-  ⬜ node-3 | FOLLOWER | term=1
-  Write after node failure → ✅ success
-
-══ DEMO 5 — Learned Index ════════════════════════════
-  [LearnedIdx] Trained on 5000 keys in 312ms | ±8 error bound
-  Accuracy: 197/200 = 98.5%
-  B+ Tree avg    : 9.2 µs
-  Learned Index  : 3.1 µs
-  Speedup        : 2.97x faster
-```
-
----
-
-## Deployment
-
-### Local (Single Node)
-```bash
-python demo.py
-```
-
-### Docker (3-Node Cluster)
-```bash
-cd docker
-docker-compose up --build
-
-# Kill a node to test fault tolerance
-docker stop phantom-node-3
-
-# Check cluster still works
-docker logs phantom-node-1
-```
-
-### Cloud (AWS EC2 Free Tier)
-See `docs/deployment.md` for full AWS deployment guide.
-
----
-
-## Skills Demonstrated
-
-| Concept | Where |
-|---------|-------|
-| DSA — B+ Tree, Bloom Filter, Skip List | `storage/btree.py`, `storage/lsm.py` |
-| OS — WAL sequential I/O, mmap, concurrency | `storage/lsm.py` |
-| System Design — LSM, Raft, MVCC, CAP theorem | `consensus/raft.py`, `phantom.py` |
-| AI/ML — Neural Learned Index (PyTorch MLP) | `ai/learned_index.py` |
-| COA — cache-friendly layouts, sequential I/O | throughout |
-| OOP — Abstract classes, Observer, Strategy | all modules |
-
----
-
-## Resume Bullets
-
-```
-• Built PHANTOM v2 — distributed in-memory DB across 3-node Raft
-  cluster with leader election and log replication (fault-tolerant)
-
-• Implemented LSM Tree with WAL crash recovery, Bloom Filter, and
-  SSTable compaction — handles datasets larger than RAM
-
-• Replaced B+ Tree with Neural Learned Index (PyTorch 2-layer MLP)
-  achieving 2-3x faster key lookup based on Google Research 2018 paper
-
-• Designed MVCC transaction system — readers never block writers,
-  consistent snapshots under concurrent access
-
-• 85,000+ write ops/sec at 11µs P50 latency | 35 tests passing
-```
+The Learned Index was the most fun. The idea that you can replace a classical data structure with a neural network and get it to work faster felt genuinely surprising the first time it ran correctly.
 
 ---
 
 ## Author
 
-**Mahendra Meena** — [LinkedIn](https://www.linkedin.com/in/mahendra-meena-72047b201/?lipi=urn%3Ali%3Apage%3Ad_flagship3_profile_view_base_contact_details%3BiaoO9%2FdjRKWOhaWxs1eueg%3D%3D)
+**Mahendra Meena**
+[LinkedIn](https://www.linkedin.com/in/mahendra-meena-72047b201/)
